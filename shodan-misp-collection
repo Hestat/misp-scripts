@@ -1,0 +1,222 @@
+#!/bin/bash
+########################################################################
+###Brian Laskowski####
+### 09-16-20 ###
+
+### Variables Section1 ###
+
+AUTHKEY=
+MISPURL=
+
+
+COBALTSTRIKE='"HTTP/1.1 404 Not Found" "Content-Type: text/plain" "Content-Length: 0" "Date" -"Server" -"Connection" -"Expires" -"Access-Control" -"Set-Cookie" -"Content-Encoding" -"Charset"'
+EMPIRE='http.html_hash:"611100469"'
+METASPLOIT='ssl:"metasploitSelfSignedCA" http.favicon.hash:"-127886975"'
+
+EMPFILE=/tmp/empire
+UUIDFILE=/tmp/uuid
+
+
+########################################################################
+### Functions ###
+
+#choose y/N
+yesno(){ read -p "$question " choice;case "$choice" in y|Y|yes|Yes|YES ) decision=1;; n|N|no|No|NO ) decision=0;; * ) echo "invalid" && yesno; esac; }
+
+collect(){
+shodan download $FILE "$QUERY"
+
+}
+
+format(){
+        gunzip -c $FILE2 |jq '[.ip_str, .port] | @csv ' | sed s/'"'/""/g | sed s/'\\'/""/g | sed s/","/:/g 
+}
+
+mispsearch(){
+curl -s --header "Authorization: $AUTHKEY" --header "Accept: application/json" --header "Content-Type: application/json" https://$MISPURL/attributes/restSearch/json/$SEARCH
+}
+
+mispsighting(){
+curl -X POST --header "Authorization: $AUTHKEY" --header "Accept: application/json" --header "Content-Type: application/json" https://$MISPURL/sightings/add/$UUID/0 
+}
+
+generate_post_data()
+{
+  cat <<EOF
+{"event_i": "$EVENTID","value": "$VALUE","category": "$CATEGORY","type": "$TYPE"}
+EOF
+}
+
+generate_tag_data()
+{
+  cat <<EOF
+{"uuid": "$UUID", "tag": "$TAG"}
+EOF
+}
+
+
+mispadd(){
+        curl -X POST --header "Authorization: $AUTHKEY " --header "Accept: application/json" --header "Content-Type: application/json" -d "$(generate_post_data)" https://$MISPURL/attributes/add/$EVENTID
+}
+
+mispsighting(){
+curl -X POST --header "Authorization: $AUTHKEY " --header "Accept: application/json" --header "Content-Type: application/json" https://$MISPURL/sightings/add/$UUID/0
+}
+
+sightingchoice(){
+echo -e "\nWould you like to add sightings? [y/n]"
+yesno; if [ $decision = 1 ];then
+searchuuid
+for i in $(cat $UUIDFILE);do UUID="$i"; mispsighting;sleepsetting;done
+else
+        echo "continue"
+fi
+}
+
+sleepsetting(){
+sleep .5
+}
+
+searchuuid(){
+for i in $(cat $EMPFILE); do SEARCH=$(echo -e $i |cut -d : -f1);mispsearch| jq .response |jq .[] | jq .[] | jq .uuid| sed s/'"'/""/g | tee -a $UUIDFILE ;sleepsetting;done
+}
+
+mispaddtag(){
+        curl --header "Authorization: $AUTHKEY " -d "$(generate_tag_data)" --header "Accept: application/json" --header "Content-Type: application/json" -X POST https://$MISPURL/tags/attachTagToObject/
+#curl --header "Authorization: $AUTHKEY " --header "Accept: application/json" --header "Content-Type: application/json" -X POST https://$MISPURL/tags/attachTagToObject/$UUID/$TAG
+}
+
+tagchoice(){
+echo -e "\nWould you like to add tags? [y/n]"
+yesno; if [ $decision = 1 ];then
+        if [[ -f $UUIDFILE ]]; then
+                for i in $(cat $UUIDFILE);do UUID="$i"; mispaddtag;sleepsetting;done
+        else
+                searchuuid
+                for i in $(cat $UUIDFILE);do UUID="$i"; mispaddtag;sleepsetting;done
+        fi
+else
+        echo "continue"
+fi
+}
+
+
+addattributechoice(){
+echo -e "\nWould you like to add new attributes to MISP? [y/n]"
+yesno; if [ $decision = 1 ];then
+for i in $(cat $EMPFILE);do VALUE="$i"; mispadd; sleepsetting;done
+else
+        echo "continue"
+fi
+}
+
+########################################################################
+
+
+### Collect from Shodan
+
+echo -e "\nWould you like to collect Powershell Empire Data? [y/n]"
+yesno; if [ $decision = 1 ];then
+        echo -e "Running Shodan Query: $EMPIRE \n for the Empire C2 Framework"
+        FILE=empire$(date +%y%m%d-%H%M)
+        QUERY=$EMPIRE
+        collect
+
+        FILE2=$FILE.json.gz
+
+        ### Process Results
+        for i in $(format);do echo $i >> $EMPFILE;done
+
+        ### Add Sightings
+        sightingchoice
+
+
+        ### Local Event VARS ###
+        EVENTID=
+        CATEGORY="Network activity"
+        TYPE="ip-dst|port"
+
+        ### Add Attributes
+        addattributechoice
+
+        ### Add Tags
+        TAG="kill-chain:Command and Control"
+        tagchoice
+
+        ### Clean Up
+        rm $EMPFILE 2> /dev/null
+        rm $UUIDFILE 2>/dev/null
+else 
+        echo -e "Continue"
+fi
+
+echo -e "\nWould you like to collect Metasploit Data? [y/n]"
+yesno; if [ $decision = 1 ];then
+        echo -e "Running Shodan Query: $METASPLOIT \ for the Metasploit C2 Framework"
+        FILE=metasploit$(date +%y%m%d-%H%M)
+        QUERY=$METASPLOIT
+        collect
+
+        FILE2=$FILE.json.gz
+
+        ### Process Results
+        for i in $(format);do echo $i >> $EMPFILE;done
+
+        ### Add Sightings
+        sightingchoice
+
+
+        ### Local Event VARS ###
+        EVENTID=
+        CATEGORY="Network activity"
+        TYPE="ip-dst|port"
+
+        ### Add Attributes
+        addattributechoice
+
+        ### Add Tags
+        TAG="kill-chain:Command and Control"
+        tagchoice
+
+        ### Clean Up
+        rm $EMPFILE 2> /dev/null
+        rm $UUIDFILE 2>/dev/null
+else
+        echo -e "Continue"
+fi
+
+echo -e "\nWould you like to collect Cobalt Strike Data? [y/n]"
+yesno; if [ $decision = 1 ];then
+        echo -e "Running Shodan Query: $COBALTSTRIKE \ for the Metasploit C2 Framework"
+        FILE=cobaltstrike$(date +%y%m%d-%H%M)
+        QUERY=$COBALTSTRIKE
+        collect
+
+        FILE2=$FILE.json.gz
+
+        ### Process Results
+        for i in $(format);do echo $i >> $EMPFILE;done
+
+        ### Add Sightings
+        sightingchoice
+
+
+        ### Local Event VARS ###
+        EVENTID=
+        CATEGORY="Network activity"
+        TYPE="ip-dst|port"
+
+        ### Add Attributes
+        addattributechoice
+
+        ### Add Tags
+        TAG="kill-chain:Command and Control"
+        tagchoice
+
+        ### Clean Up
+        rm $EMPFILE 2> /dev/null
+        rm $UUIDFILE 2>/dev/null
+else
+        echo -e "Continue"
+fi
+
